@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Splash monitor</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="components.css">
+<link rel="stylesheet" href="app.css">
+<script>
+  try {
+    const t = localStorage.getItem("splash.theme") ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<header class="st-header">
+  <span class="st-header__brand">Splash</span>
+  <span class="muted" id="model-name"></span>
+  <span class="st-header__spacer"></span>
+  <span class="muted small" id="header-uptime"></span>
+  <span class="st-pill" id="pill" data-state="idle" role="status" aria-live="polite">
+    <span class="st-pill__dot"></span><span id="pill-text">Connecting&hellip;</span></span>
+  <button class="st-btn st-btn--icon" id="theme-btn" title="Light / dark" aria-label="Switch between light and dark">
+    <svg class="st-icon"><use id="theme-icon" href="sprite.svg#i-moon"/></svg></button>
+</header>
+
+<main>
+  <section class="view view--monitor" id="view-monitor">
+    <div class="monitor">
+      <div class="st-card notice" id="notice" hidden><span id="notice-text"></span></div>
+      <div class="st-card warn-strip" id="warn-strip" hidden><span class="st-badge st-badge--queued">Reuse</span><span id="warn-text"></span></div>
+      <div class="st-card warn-strip" id="mem-strip" hidden><span class="st-badge st-badge--queued">Memory</span><span id="mem-text"></span></div>
+
+      <div class="st-card state-card">
+        <div class="state-card__head">
+          <span class="card-title">Model state</span>
+          <span class="badges" id="state-badges">
+            <span class="st-badge" data-s="idle">Idle</span>
+            <span class="st-badge st-badge--reading" data-s="reading">Reading</span>
+            <span class="st-badge st-badge--generating" data-s="generating">Generating</span>
+            <span class="st-badge st-badge--queued" data-s="queued">Queued</span>
+            <span class="st-badge" data-s="released">Released</span>
+            <span class="st-badge st-badge--error" data-s="error">Error</span>
+          </span>
+        </div>
+        <div class="state-card__row"><span id="state-label">Waiting for a request</span><span class="muted" id="state-detail"></span></div>
+        <div class="st-progress" id="state-progress"><div class="st-progress__bar" id="state-bar" style="width:0%"></div></div>
+        <div class="active-list" id="active-list" hidden></div>
+      </div>
+
+      <div class="metrics" id="metrics"></div>
+
+      <div class="monitor-row">
+        <div class="st-card ctx-card">
+          <span class="card-title">Context fill</span>
+          <div class="ctx-gauge">
+            <svg class="st-gauge" viewBox="0 0 120 120" aria-hidden="true">
+              <circle class="st-gauge__track" cx="60" cy="60" r="50" fill="none" stroke-width="10" stroke-linecap="round"
+                      stroke-dasharray="235.6 314.2" transform="rotate(135 60 60)"/>
+              <circle class="st-gauge__fill" id="ctx-fill" cx="60" cy="60" r="50" fill="none" stroke-width="10"
+                      stroke-linecap="round" stroke-dasharray="0 314.2" transform="rotate(135 60 60)"/>
+            </svg>
+            <div class="ctx-gauge__label"><span class="ctx-gauge__pct" id="ctx-pct">0%</span><span class="muted" id="ctx-sub">&ndash;</span></div>
+          </div>
+          <p class="muted small ctx-note" id="ctx-note"></p>
+          <div class="bar-row"><span title="Share of the last 20 prompts' tokens that were reused from the cache">Prefix reuse (last 20)</span><span class="muted" id="reuse-text">&ndash;</span></div>
+          <div class="st-progress"><div class="st-progress__bar" id="reuse-bar" style="width:0%"></div></div>
+          <div class="bar-row"><span title="How each of the last 100 requests got its prompt">Reuse paths (last 100)</span><span class="muted" id="paths-sum">&ndash;</span></div>
+          <div class="paths" id="paths"><span class="muted small">&ndash;</span></div>
+          <div class="bar-row"><span title="Activity Monitor's Memory Used: app + wired + compressed">System RAM</span><span class="muted" id="ram-text">&ndash;</span></div>
+          <div class="st-progress" id="ram-progress"><div class="st-progress__bar" id="ram-bar" style="width:0%"></div></div>
+          <div class="bar-row"><span>Swap</span><span class="muted" id="swap-text">&ndash;</span></div>
+          <div class="st-progress" data-tone="warn"><div class="st-progress__bar" id="swap-bar" style="width:0%"></div></div>
+          <div class="bar-row"><span>SoC temperature</span><span class="muted" id="temp-text">&ndash;</span></div>
+          <div class="st-progress" data-tone="warn"><div class="st-progress__bar" id="temp-bar" style="width:0%"></div></div>
+        </div>
+        <div class="st-card req-card">
+          <div class="req-head"><span class="card-title">Recent requests</span>
+            <span class="req-tools"><label class="small muted" title="Requests that wrote only a few tokens and used no tools (title generation, warm-ups)"><input type="checkbox" id="hide-aux"> Hide aux requests</label>
+            <button class="st-btn st-btn--secondary" id="req-all" hidden>Show all</button></span></div>
+          <div class="table-wrap" id="req-wrap">
+            <table class="st-table">
+              <thead><tr><th>Time</th><th>Status</th><th class="num">Prompt</th><th class="num" title="Tokens served from the cached prefix or deduplicated KV">Reused</th><th class="num">Output</th>
+                <th class="num">Tok/s</th><th class="num" title="Share of the draft tokens the model accepted, known while the request ran alone">Draft hit</th>
+                <th class="num" title="Output tokens per decode cycle">Tok/cycle</th>
+                <th class="num" title="Time to first token">TTFT</th><th class="num" title="Wait in the engine queue before prefill started">Queue</th>
+                <th title="Reasoning effort and whether the request thought">Think</th><th class="num" title="Tool definitions the request sent">Tools</th>
+                <th class="num" title="queue / prefill / decode; hover for the numbers">Duration</th></tr></thead>
+              <tbody id="req-body"><tr><td colspan="13" class="muted">No requests yet</td></tr></tbody>
+            </table>
+          </div>
+          <p class="muted req-totals" id="req-totals"></p>
+        </div>
+      </div>
+
+      <div class="monitor-row3">
+        <div class="st-card ana-card"><span class="card-title">Speculative decoding</span>
+          <svg class="spec-bars" id="spec-bars" viewBox="0 0 140 70" preserveAspectRatio="none" aria-label="Tokens per cycle of the recent requests"></svg>
+          <p class="muted small" id="spec-note">&ndash;</p></div>
+        <div class="st-card ana-card"><span class="card-title">GPU vs host</span>
+          <div class="bar-row"><span title="Decode time inside GPU commands">Decode on the GPU</span><span class="muted" id="wait-text">&ndash;</span></div>
+          <div class="st-progress" data-tone="info"><div class="st-progress__bar" id="wait-bar" style="width:0%"></div></div>
+          <div class="bar-row"><span title="Decode time between GPU commands">Decode on the host</span><span class="muted" id="host-text">&ndash;</span></div>
+          <div class="st-progress" data-tone="warn"><div class="st-progress__bar" id="host-bar" style="width:0%"></div></div>
+          <div class="bar-row"><span title="Neural Engine milliseconds over the prefill commands' wall time">Prefill on the ANE</span><span class="muted" id="ane-share-text">&ndash;</span></div>
+          <div class="st-progress"><div class="st-progress__bar" id="ane-share-bar" style="width:0%"></div></div>
+          <p class="muted small" id="host-note"></p></div>
+        <div class="st-card ana-card"><span class="card-title">Prefill speed by prompt size</span>
+          <div id="buckets"><span class="muted small">&ndash;</span></div></div>
+        <div class="st-card ana-card"><div class="req-head"><span class="card-title">Errors</span><span class="st-badge st-badge--error" id="err-badge" hidden></span></div>
+          <p class="muted small" id="err-note">No errors</p>
+          <details id="err-details" hidden><summary class="small">Reasons</summary><div id="err-list" class="small"></div></details>
+          <div class="kv-list small" id="err-counters"></div></div>
+      </div>
+
+      <div class="monitor-row2">
+        <div class="st-card cc-card">
+          <div class="req-head"><span class="card-title">Memory plan</span><span class="muted small" id="plan-sum"></span></div>
+          <div class="stack" id="plan-stack"></div>
+          <div class="stack-legend small" id="plan-legend"></div>
+          <div class="kv-list small" id="plan-list"></div>
+        </div>
+        <div class="st-card cc-card">
+          <div class="req-head"><span class="card-title">Neural Engine and processes</span><span class="st-badge" id="ane-badge">&ndash;</span></div>
+          <div class="kv-list small" id="ane-list"></div>
+          <div class="kv-list small" id="proc-list"></div>
+        </div>
+      </div>
+
+      <div class="st-card cc-card">
+        <div class="req-head"><span class="card-title">Conversation cache</span><span class="muted small" id="cc-sum"></span></div>
+        <div class="cc-bars" id="cc-bars">
+          <div><div class="bar-row"><span title="Pages of the KV pool that hold tokens">KV pages</span><span class="muted" id="cc-pg-text">&ndash;</span></div>
+            <div class="st-progress"><div class="st-progress__bar" id="cc-pg-bar" style="width:0%"></div></div></div>
+          <div><div class="bar-row"><span title="KV memory allocated so far, of the plan's capacity">KV memory</span><span class="muted" id="cc-kv-text">&ndash;</span></div>
+            <div class="st-progress"><div class="st-progress__bar" id="cc-kv-bar" style="width:0%"></div></div></div>
+          <div><div class="bar-row"><span title="The SSD cache's files, of its limit">SSD cache</span><span class="muted" id="cc-disk-text">&ndash;</span></div>
+            <div class="st-progress" data-tone="info"><div class="st-progress__bar" id="cc-disk-bar" style="width:0%"></div></div></div>
+          <div><div class="bar-row"><span title="Cached states held in memory">Cached states</span><span class="muted" id="cc-state-text">&ndash;</span></div>
+            <div class="st-progress" data-tone="info"><div class="st-progress__bar" id="cc-state-bar" style="width:0%"></div></div></div>
+        </div>
+        <div class="xfer small" id="xfer"></div>
+        <div class="kv-grid small" id="cc-grid"></div>
+      </div>
+
+      <div class="monitor-row2">
+        <div class="st-card cc-card">
+          <div class="req-head"><span class="card-title">Latency by stage</span><span class="muted small" id="lat-sum"></span></div>
+          <div class="table-wrap"><table class="st-table st-table--tight"><thead><tr><th>Stage</th><th class="num">Count</th><th class="num">Mean</th><th class="num" title="Upper bound of the histogram bucket holding the median">p50 &le;</th><th class="num" title="Upper bound of the histogram bucket holding the 95th percentile">p95 &le;</th></tr></thead><tbody id="lat-body"></tbody></table></div>
+        </div>
+        <div class="st-card cc-card">
+          <div class="req-head"><span class="card-title">Temperature sensors</span><span class="muted small" id="sensors-sum"></span></div>
+          <div class="sensors small" id="sensors"></div>
+          <div class="kv-list small" id="hw-list"></div>
+        </div>
+      </div>
+
+      <div class="st-card cc-card">
+        <div class="req-head"><span class="card-title">Server log</span><span class="muted small" id="log-sum"></span></div>
+        <div class="log-box" id="log-box"></div>
+      </div>
+
+      <details class="st-card raw-card" id="raw-card">
+        <summary><span class="card-title">Everything in /status</span> <span class="muted small" id="raw-sum">every field the server reports, live</span></summary>
+        <input class="st-input raw-search" id="raw-search" type="search" placeholder="Filter by name or value" aria-label="Filter the status fields">
+        <div class="raw-tree small" id="raw-tree"></div>
+      </details>
+    </div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
